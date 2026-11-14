@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Teste Drive</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icone_180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Teste Drive">
+<meta name="theme-color" content="#155850">
+<!-- Teste do SGO_RA no celular: entrar na conta Google e gravar/ler um arquivo no Google Drive.
+     © 2026 Marcia Sales. Nenhum dado de paciente é usado aqui. -->
+<style>
+  :root { --verde:#155850; --verde2:#2f9e8f; --fundo:#f4f8f7; --texto:#1d2b29; --cinza:#6b7a77; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; background:var(--fundo); color:var(--texto);
+    font-family:"Segoe UI",-apple-system,BlinkMacSystemFont,Roboto,sans-serif; touch-action:manipulation; }
+  header { background:var(--verde); color:#fff; padding:calc(14px + env(safe-area-inset-top)) 16px 14px; }
+  header h1 { margin:0; font-size:19px; font-weight:600; }
+  header p { margin:4px 0 0; font-size:13px; opacity:.85; }
+  main { padding:16px; max-width:560px; margin:0 auto; }
+  .passo { background:#fff; border-radius:12px; padding:14px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  .passo h2 { margin:0 0 8px; font-size:15px; color:var(--verde); }
+  button { width:100%; min-height:46px; border:0; border-radius:10px; background:var(--verde2); color:#fff;
+    font-size:16px; font-weight:600; font-family:inherit; touch-action:manipulation; }
+  button:disabled { background:#b9cbc8; }
+  .situacao { margin-top:8px; font-size:14px; color:var(--cinza); min-height:20px; white-space:pre-wrap; word-break:break-word; }
+  .ok { color:#1d7a4a; } .erro { color:#b3261e; }
+  #registro { font-size:12px; color:var(--cinza); white-space:pre-wrap; word-break:break-word; max-height:220px; overflow:auto; }
+  .info { font-size:13px; color:var(--cinza); margin:0 0 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Teste do Google Drive</h1>
+  <p>SGO_RA no celular — teste da ponte</p>
+</header>
+<main>
+  <p class="info" id="modo"></p>
+
+  <div class="passo">
+    <h2>1. Entrar na conta Google</h2>
+    <button id="b-entrar" disabled>Entrar com o Google</button>
+    <div class="situacao" id="s-entrar">Carregando…</div>
+  </div>
+
+  <div class="passo">
+    <h2>2. Gravar um arquivo de teste no Drive</h2>
+    <button id="b-gravar" disabled>Gravar arquivo</button>
+    <div class="situacao" id="s-gravar"></div>
+  </div>
+
+  <div class="passo">
+    <h2>3. Ler o arquivo do Drive</h2>
+    <button id="b-ler" disabled>Ler arquivo</button>
+    <div class="situacao" id="s-ler"></div>
+  </div>
+
+  <div class="passo">
+    <h2>Registro do teste</h2>
+    <div id="registro"></div>
+  </div>
+</main>
+
+<script>
+const ID_CLIENTE = '668705708420-atshe9peedf5efob0mruif4hs27juurq.apps.googleusercontent.com';
+const PERMISSAO = 'https://www.googleapis.com/auth/drive.file';
+const NOME_ARQUIVO = 'SGO_RA_teste.json';
+const $ = (id) => document.getElementById(id);
+
+let token = null, validade = 0, clienteToken = null;
+
+function anotar(texto) {
+  const agora = new Date().toLocaleTimeString('pt-BR');
+  $('registro').textContent = agora + ' — ' + texto + '\n' + $('registro').textContent;
+  try {
+    const hist = JSON.parse(localStorage.getItem('teste_registro') || '[]');
+    hist.unshift(new Date().toLocaleString('pt-BR') + ' — ' + texto);
+    localStorage.setItem('teste_registro', JSON.stringify(hist.slice(0, 40)));
+  } catch (e) {}
+}
+function situacao(id, texto, tipo) { const el = $(id); el.textContent = texto; el.className = 'situacao ' + (tipo || ''); }
+function liberar(ligado) { $('b-gravar').disabled = !ligado; $('b-ler').disabled = !ligado; }
+
+// Mostra se está aberto como app da Tela de Início ou no navegador
+const comoApp = window.navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+$('modo').textContent = comoApp ? 'Aberto como app da Tela de Início.' : 'Aberto no navegador (ainda não como app).';
+
+// Histórico dos testes anteriores (para saber o que aconteceu ao fechar e abrir)
+try {
+  const hist = JSON.parse(localStorage.getItem('teste_registro') || '[]');
+  if (hist.length) $('registro').textContent = '— testes anteriores —\n' + hist.join('\n');
+} catch (e) {}
+
+// Token guardado da última vez (só para o teste: dura no máximo 1 hora)
+try {
+  const g = JSON.parse(localStorage.getItem('teste_token') || 'null');
+  if (g && g.validade > Date.now() + 60000) { token = g.token; validade = g.validade; }
+} catch (e) {}
+
+function aoReceberToken(resp) {
+  if (resp.error) {
+    situacao('s-entrar', 'Não entrou: ' + resp.error, 'erro');
+    anotar('ERRO ao entrar: ' + resp.error + (resp.error_description ? ' — ' + resp.error_description : ''));
+    return;
+  }
+  token = resp.access_token;
+  validade = Date.now() + (Number(resp.expires_in) || 3600) * 1000;
+  try { localStorage.setItem('teste_token', JSON.stringify({ token, validade })); } catch (e) {}
+  situacao('s-entrar', 'Entrou! ✔', 'ok');
+  anotar('Entrou na conta Google (' + (comoApp ? 'app' : 'navegador') + ').');
+  liberar(true);
+}
+
+function iniciarGoogle() {
+  if (!window.google || !google.accounts || !google.accounts.oauth2) { setTimeout(iniciarGoogle, 300); return; }
+  clienteToken = google.accounts.oauth2.initTokenClient({
+    client_id: ID_CLIENTE,
+    scope: PERMISSAO,
+    callback: aoReceberToken,
+    error_callback: (err) => {
+      situacao('s-entrar', 'A janela do Google não abriu ou foi fechada (' + (err && err.type) + ').', 'erro');
+      anotar('ERRO na janela do Google: ' + (err && err.type));
+    }
+  });
+  $('b-entrar').disabled = false;
+  if (token) {
+    situacao('s-entrar', 'Já estava conectada (de antes). ✔', 'ok');
+    anotar('Abriu e continuou conectada (sem entrar de novo).');
+    liberar(true);
+  } else {
+    situacao('s-entrar', 'Toque em "Entrar com o Google".');
+  }
+}
+
+$('b-entrar').onclick = () => {
+  situacao('s-entrar', 'Abrindo a janela do Google…');
+  anotar('Tocou em Entrar.');
+  clienteToken.requestAccessToken({ prompt: '' });
+};
+
+async function drive(url, opcoes) {
+  if (!token || Date.now() > validade) throw new Error('A entrada venceu. Toque em "Entrar com o Google" de novo.');
+  opcoes = opcoes || {};
+  opcoes.headers = Object.assign({ Authorization: 'Bearer ' + token }, opcoes.headers || {});
+  const r = await fetch(url, opcoes);
+  if (!r.ok) throw new Error('Drive respondeu ' + r.status + ': ' + (await r.text()).slice(0, 200));
+  return r;
+}
+
+async function acharArquivo() {
+  const q = encodeURIComponent("name='" + NOME_ARQUIVO + "' and trashed=false");
+  const r = await drive('https://www.googleapis.com/drive/v3/files?q=' + q + '&fields=files(id,name,modifiedTime)&spaces=drive');
+  const j = await r.json();
+  return j.files && j.files[0];
+}
+
+$('b-gravar').onclick = async () => {
+  situacao('s-gravar', 'Gravando…');
+  try {
+    const conteudo = JSON.stringify({
+      mensagem: 'Olá! Este arquivo foi gravado pelo teste do SGO_RA no celular.',
+      gravadoEm: new Date().toLocaleString('pt-BR'),
+      aparelho: comoApp ? 'app da Tela de Início' : 'navegador'
+    }, null, 2);
+    const existente = await acharArquivo();
+    if (existente) {
+      await drive('https://www.googleapis.com/upload/drive/v3/files/' + existente.id + '?uploadType=media',
+        { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: conteudo });
+    } else {
+      const limite = 'sgora' + Date.now();
+      const corpo = '--' + limite + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' +
+        JSON.stringify({ name: NOME_ARQUIVO, mimeType: 'application/json' }) +
+        '\r\n--' + limite + '\r\nContent-Type: application/json\r\n\r\n' + conteudo + '\r\n--' + limite + '--';
+      await drive('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
+        { method: 'POST', headers: { 'Content-Type': 'multipart/related; boundary=' + limite }, body: corpo });
+    }
+    situacao('s-gravar', 'Gravado no Drive! ✔', 'ok');
+    anotar('Gravou o arquivo no Drive' + (existente ? ' (atualizou)' : ' (novo)') + '.');
+  } catch (e) {
+    situacao('s-gravar', String(e.message || e), 'erro');
+    anotar('ERRO ao gravar: ' + (e.message || e));
+  }
+};
+
+$('b-ler').onclick = async () => {
+  situacao('s-ler', 'Lendo…');
+  try {
+    const arq = await acharArquivo();
+    if (!arq) { situacao('s-ler', 'Ainda não há arquivo. Faça o passo 2 primeiro.', 'erro'); return; }
+    const r = await drive('https://www.googleapis.com/drive/v3/files/' + arq.id + '?alt=media');
+    const j = await r.json();
+    situacao('s-ler', 'Lido do Drive! ✔\n' + j.mensagem + '\nGravado em: ' + j.gravadoEm + ' (' + j.aparelho + ')', 'ok');
+    anotar('Leu o arquivo do Drive (gravado em ' + j.gravadoEm + ').');
+  } catch (e) {
+    situacao('s-ler', String(e.message || e), 'erro');
+    anotar('ERRO ao ler: ' + (e.message || e));
+  }
+};
+</script>
+<script src="https://accounts.google.com/gsi/client" async onload="iniciarGoogle()"></script>
+</body>
+</html>
